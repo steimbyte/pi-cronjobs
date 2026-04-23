@@ -1,3 +1,5 @@
+[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/steimerbyte)
+
 # pi-cronjobs
 
 Schedule cronjobs that inject prompts into your **active** pi session.
