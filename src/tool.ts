@@ -21,32 +21,28 @@
 
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
+import { Type, Static } from "@sinclair/typebox";
 import type { Cronjob, CronjobDetails } from "./types";
 import type { CronjobStateManager } from "./state-manager";
 
-// --- CLI Parser ---
+// --- Schema ---
 
-export interface CronToolInput {
-  // Action flags (one required)
-  add?: boolean;
-  list?: boolean;
-  delete?: boolean;
-  pause?: boolean;
-  resume?: boolean;
-  clear?: boolean;
-  help?: boolean;
-  
-  // Options for --add
-  name?: string;
-  every?: string;      // 5m, 15m, 1h, 2h, 1d, 1w or cron expression
-  "max-triggers"?: number;
-  
-  // Target for delete/pause/resume
-  id?: string;
-  
-  // Trailing argument (the prompt)
-  prompt?: string;
-}
+export const CrontabSchema = Type.Object({
+  add: Type.Optional(Type.Boolean({ description: "Create a new cronjob" })),
+  list: Type.Optional(Type.Boolean({ description: "List all cronjobs" })),
+  delete: Type.Optional(Type.Boolean({ description: "Delete a cronjob by ID" })),
+  pause: Type.Optional(Type.Boolean({ description: "Pause a cronjob" })),
+  resume: Type.Optional(Type.Boolean({ description: "Resume a paused cronjob" })),
+  clear: Type.Optional(Type.Boolean({ description: "Clear all cronjobs" })),
+  help: Type.Optional(Type.Boolean({ description: "Show help" })),
+  name: Type.Optional(Type.String({ description: "Name for the cronjob" })),
+  every: Type.Optional(Type.String({ description: 'Interval: 1m, 5m, 10m, 15m, 30m, 1h, 2h, 1d, 1w or cron expression' })),
+  "max-triggers": Type.Optional(Type.Number({ description: "Max triggers (-1 = infinite)" })),
+  id: Type.Optional(Type.String({ description: "Cronjob ID (for delete/pause/resume)" })),
+  prompt: Type.Optional(Type.String({ description: "The prompt to inject when triggered" })),
+});
+
+export type CronToolInput = Static<typeof CrontabSchema>;
 
 function parseEvery(every: string): string {
   // Shortcut intervals
@@ -121,6 +117,7 @@ Examples:
   crontab --add --name "Daily" --every "1d" -- "Standup reminder"
   crontab --add --every "*/15 * * * *" -- "Custom cron expression"
 `,
+    parameters: CrontabSchema,
 
     async execute(
       toolCallId: string,
