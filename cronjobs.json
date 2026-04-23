@@ -11,8 +11,20 @@
       "triggerCount": 0,
       "lastTriggered": null,
       "nextTrigger": 1776938400000
+    },
+    {
+      "name": "WhatsApp Nachrichten-Check",
+      "cronExpression": "* * * * *",
+      "prompt": "Prüfe ob neue WhatsApp-Nachrichten vorhanden sind. Nutze das evo-whatsapp Tool oder prüfe die Evolution API.",
+      "status": "active",
+      "maxTriggers": -1,
+      "id": "cron_3",
+      "createdAt": 1745395260000,
+      "triggerCount": 0,
+      "lastTriggered": null,
+      "nextTrigger": null
     }
   ],
-  "nextId": 3,
+  "nextId": 4,
   "widgetEnabled": true
 }

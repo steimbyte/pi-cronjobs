@@ -1,367 +1,315 @@
 /**
- * manage_cronjobs tool — create, list, update, delete cronjobs.
+ * crontab - CLI-style cronjob management for pi.
+ * 
+ * Usage:
+ *   crontab --add --name "Reminder" --every "5m" -- "Your prompt here"
+ *   crontab --list
+ *   crontab --delete <id>
+ *   crontab --pause <id>
+ *   crontab --resume <id>
+ *   crontab --clear
+ * 
+ * Interval shortcuts:
+ *   5m  = every 5 minutes
+ *   15m = every 15 minutes  
+ *   1h  = every hour
+ *   2h  = every 2 hours
+ *   1d  = daily at 9:00 AM
+ *   1w  = weekly on Monday at 9:00 AM
  */
 
-import { StringEnum } from "@mariozechner/pi-ai";
-import type {
-  Theme,
-  ExtensionContext,
-  AgentToolResult,
-  ToolRenderResultOptions,
-} from "@mariozechner/pi-coding-agent";
+import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
-import { Type, type Static } from "@sinclair/typebox";
 import type { Cronjob, CronjobDetails } from "./types";
 import type { CronjobStateManager } from "./state-manager";
-import { STATUS_ICONS, describeCron } from "./ui/cron-widget";
 
-// --- Schema ---
+// --- CLI Parser ---
 
-export const CronjobInputSchema = Type.Object({
-  operation: StringEnum(["create", "list", "update", "delete", "pause", "resume"] as const, {
-    description: "create: Create new cronjob. list: List all cronjobs. update: Update cronjob. delete: Remove cronjob. pause: Pause active job. resume: Resume paused job.",
-  }),
-  id: Type.Optional(Type.String({ description: "Cronjob ID (required for update/delete/pause/resume)" })),
-  name: Type.Optional(Type.String({ description: "Name for the cronjob (required for create)" })),
-  cronExpression: Type.Optional(Type.String({ description: "Cron expression: min hour day month weekday. Examples: '*/5 * * * *' = every 5 min, '0 * * * *' = hourly, '0 9 * * 1-5' = 9am weekdays" })),
-  prompt: Type.Optional(Type.String({ description: "Prompt to inject when cronjob triggers (required for create)" })),
-  status: Type.Optional(StringEnum(["active", "paused", "completed"] as const, { description: "Job status" })),
-  maxTriggers: Type.Optional(Type.Number({ description: "Max times to trigger (-1 = infinite). Default: -1" })),
-});
+export interface CronToolInput {
+  // Action flags (one required)
+  add?: boolean;
+  list?: boolean;
+  delete?: boolean;
+  pause?: boolean;
+  resume?: boolean;
+  clear?: boolean;
+  
+  // Options for --add
+  name?: string;
+  every?: string;      // 5m, 15m, 1h, 2h, 1d, 1w or cron expression
+  "max-triggers"?: number;
+  
+  // Target for delete/pause/resume
+  id?: string;
+  
+  // Trailing argument (the prompt)
+  prompt?: string;
+}
 
-export type ManageCronjobsInput = Static<typeof CronjobInputSchema>;
+function parseEvery(every: string): string {
+  // Shortcut intervals
+  const shortcuts: Record<string, string> = {
+    "5m":  "*/5 * * * *",
+    "10m": "*/10 * * * *",
+    "15m": "*/15 * * * *",
+    "30m": "*/30 * * * *",
+    "1h":  "0 * * * *",
+    "2h":  "0 */2 * * *",
+    "3h":  "0 */3 * * *",
+    "6h":  "0 */6 * * *",
+    "12h": "0 */12 * * *",
+    "1d":  "0 9 * * *",
+    "2d":  "0 9 */2 * *",
+    "1w":  "0 9 * * 1",
+    "1mo": "0 9 1 * *",
+  };
+  
+  const normalized = every.toLowerCase().trim();
+  return shortcuts[normalized] || every;
+}
 
-// --- Tool Description ---
+function formatEvery(cron: string): string {
+  const shortcuts: Record<string, string> = {
+    "*/5 * * * *":  "5m",
+    "*/10 * * * *": "10m",
+    "*/15 * * * *": "15m",
+    "*/30 * * * *": "30m",
+    "0 * * * *":    "1h",
+    "0 */2 * * *":  "2h",
+    "0 */3 * * *":  "3h",
+    "0 */6 * * *":  "6h",
+    "0 */12 * * *": "12h",
+    "0 9 * * *":    "1d",
+    "0 9 */2 * *":  "2d",
+    "0 9 * * 1":    "1w",
+    "0 9 1 * *":    "1mo",
+  };
+  
+  return shortcuts[cron] || cron;
+}
 
-export const TOOL_DESCRIPTION = `Manage scheduled cronjobs that inject prompts into the session.
-
-When to use this tool:
-- Automate recurring tasks or reminders
-- Schedule periodic checks or updates
-- Create timed notifications or actions
-- Set up monitoring workflows
-
-CRON SYNTAX (5 fields):
-  ┌───────────── minute (0-59)
-  │ ┌───────────── hour (0-23)
-  │ │ ┌───────────── day of month (1-31)
-  │ │ │ ┌───────────── month (1-12)
-  │ │ │ │ ┌───────────── day of week (0-6, Sun=0)
-  │ │ │ │ │
-  * * * * *
-
-COMMON PATTERNS:
-  */5 * * * *    Every 5 minutes
-  */15 * * * *   Every 15 minutes
-  0 * * * *      Every hour (at :00)
-  0 */2 * * *    Every 2 hours
-  0 9 * * *      Daily at 9:00 AM
-  0 9 * * 1-5    Weekdays at 9:00 AM
-  0 18 * * *     Daily at 6:00 PM
-  0 0 * * 0      Every Sunday at midnight
-
-FIELD MODIFIERS:
-  *       Any value
-  */n     Every n units (e.g., */10 = every 10)
-  n-m     Range (e.g., 1-5 = Mon-Fri)
-  n,m     List (e.g., 1,15 = 1st and 15th)
-  n-m/s   Range with step
-
-EXAMPLES:
-- Create: Every 5 min reminder
-- List: See all scheduled jobs
-- Update: Change schedule or prompt
-- Delete: Remove a scheduled job
-
-IMPORTANT: When triggered, the cronjob's prompt is injected as a user message, causing the agent to respond.`;
-
-// --- Tool Factory ---
-
-export function createManageCronjobsTool(state: CronjobStateManager, onUpdate: () => void) {
+export function createCrontabTool(state: CronjobStateManager, onUpdate: () => void) {
   return {
-    name: "manage_cronjobs",
-    label: "Cronjobs",
-    description: TOOL_DESCRIPTION,
-    parameters: CronjobInputSchema,
+    name: "crontab",
+    label: "Crontab",
+    description: `CLI-style cronjob management.
+
+Usage:
+  crontab --add --name "Reminder" --every "5m" -- "Your prompt here"
+  crontab --list
+  crontab --delete <id>
+  crontab --pause <id>
+  crontab --resume <id>
+  crontab --clear
+
+Interval shortcuts:
+  5m  = every 5 minutes
+  10m = every 10 minutes
+  15m = every 15 minutes
+  30m = every 30 minutes
+  1h  = every hour (at :00)
+  2h  = every 2 hours
+  1d  = daily at 9:00 AM
+  1w  = weekly on Monday at 9:00 AM
+
+Examples:
+  crontab --add --every "5m" -- "Check system status"
+  crontab --add --name "Daily" --every "1d" -- "Standup reminder"
+  crontab --add --every "*/15 * * * *" -- "Custom cron expression"
+`,
 
     async execute(
       toolCallId: string,
-      params: ManageCronjobsInput,
+      params: CronToolInput,
       _signal: AbortSignal | undefined,
       _onStreamUpdate: any,
-      _ctx: ExtensionContext
+      ctx: ExtensionContext
     ) {
-      switch (params.operation) {
-        case "list":
-          return handleList(state);
-
-        case "create":
-          return handleCreate(state, params, onUpdate);
-
-        case "update":
-          return handleUpdate(state, params, onUpdate);
-
-        case "delete":
-          return handleDelete(state, params, onUpdate);
-
-        case "pause":
-          return handlePause(state, params, onUpdate);
-
-        case "resume":
-          return handleResume(state, params, onUpdate);
-
-        default:
-          return {
-            content: [{ type: "text" as const, text: "Unknown operation" }],
-            details: { operation: params.operation, cronjobs: state.read(), error: "Unknown operation" } as CronjobDetails,
-            isError: true,
-          };
+      // --list
+      if (params.list || (!params.add && !params.delete && !params.pause && !params.resume && !params.clear)) {
+        return handleList(state);
       }
+      
+      // --clear
+      if (params.clear) {
+        return handleClear(state, onUpdate);
+      }
+      
+      // --add
+      if (params.add) {
+        return handleAdd(state, params, onUpdate);
+      }
+      
+      // --delete
+      if (params.delete) {
+        return handleDelete(state, params.id!, onUpdate);
+      }
+      
+      // --pause
+      if (params.pause) {
+        return handlePause(state, params.id!, onUpdate);
+      }
+      
+      // --resume
+      if (params.resume) {
+        return handleResume(state, params.id!, onUpdate);
+      }
+      
+      return {
+        content: [{ type: "text" as const, text: "Unknown operation" }],
+        isError: true,
+      };
     },
 
-    renderCall(args: ManageCronjobsInput, theme: Theme) {
-      let text = theme.fg("toolTitle", theme.bold("manage_cronjobs "));
-      text += theme.fg("muted", args.operation);
-
-      if (args.operation === "create" && args.name) {
-        text += theme.fg("dim", ` (${args.name})`);
-      }
-      if (args.id) {
-        text += theme.fg("dim", ` [${args.id}]`);
-      }
-
+    renderCall(args: CronToolInput, theme: any) {
+      let text = theme.fg("toolTitle", theme.bold("crontab "));
+      
+      if (args.add) text += theme.fg("accent", "+ ");
+      else if (args.delete) text += theme.fg("error", "x ");
+      else if (args.list) text += theme.fg("muted", "ls");
+      else if (args.clear) text += theme.fg("error", "rm *");
+      else text += theme.fg("muted", "ls");
+      
+      if (args.name) text += theme.fg("dim", ` "${args.name}"`);
+      if (args.every) text += theme.fg("dim", ` @${args.every}`);
+      if (args.id) text += theme.fg("dim", ` #${args.id}`);
+      
       return new Text(text, 0, 0);
     },
 
-    renderResult(
-      result: AgentToolResult<CronjobDetails | undefined>,
-      { expanded }: ToolRenderResultOptions,
-      theme: Theme
-    ) {
-      const details = result.details;
-      if (!details) {
-        const first = result.content[0];
-        return new Text(first && "text" in first ? first.text : "", 0, 0);
+    renderResult(result: any, options: any, theme: any) {
+      if (result.isError) {
+        return new Text(theme.fg("error", result.content?.[0]?.text || "Error"), 0, 0);
       }
-
-      if (details.error) {
-        return new Text(theme.fg("error", `✗ ${details.error}`), 0, 0);
-      }
-
-      const cronjobs = details.cronjobs;
-      const stats = state.getStats();
-
-      if (details.operation === "list") {
-        let text = theme.fg("success", "✓ ") + theme.fg("muted", `${stats.active} active, ${stats.paused} paused`);
-
-        if (expanded && cronjobs.length > 0) {
-          for (const cj of cronjobs) {
-            const icon = STATUS_ICONS[cj.status] ?? "?";
-            const iconColor = cj.status === "active"
-              ? theme.fg("success", icon)
-              : cj.status === "paused"
-                ? theme.fg("warning", icon)
-                : theme.fg("dim", icon);
-
-            const name = theme.fg("accent", cj.name);
-            const schedule = theme.fg("muted", describeCron(cj.cronExpression));
-            const next = cj.nextTrigger
-              ? theme.fg("dim", `next: ${new Date(cj.nextTrigger).toLocaleTimeString()}`)
-              : "";
-
-            text += `\n  ${iconColor} ${name} ${schedule} ${next}`;
-          }
-        }
-
-        return new Text(text, 0, 0);
-      }
-
-      // Create/update/delete/pause/resume
-      return new Text(
-        theme.fg("success", `✓ ${details.operation} completed`) +
-        theme.fg("dim", ` (${stats.total} total)`),
-        0, 0
-      );
+      return new Text(result.content?.[0]?.text || "OK", 0, 0);
     },
   };
 }
 
+// --- Handlers ---
+
 function handleList(state: CronjobStateManager) {
   const cronjobs = state.read();
+  const stats = state.getStats();
+  
+  if (cronjobs.length === 0) {
+    return {
+      content: [{ type: "text" as const, text: "No cronjobs scheduled. Use --add to create one." }],
+      details: { operation: "list", cronjobs } as CronjobDetails,
+    };
+  }
+  
+  let text = `${stats.active} active, ${stats.paused} paused, ${stats.completed} completed\n`;
+  text += "─".repeat(50) + "\n";
+  
+  for (const cj of cronjobs) {
+    const statusIcon = cj.status === "active" ? "●" : cj.status === "paused" ? "○" : "✓";
+    const statusColor = cj.status === "active" ? "\x1b[32m" : cj.status === "paused" ? "\x1b[33m" : "\x1b[90m";
+    const interval = formatEvery(cj.cronExpression);
+    const next = cj.nextTrigger ? new Date(cj.nextTrigger).toLocaleTimeString() : "-";
+    
+    text += `${statusIcon} [${cj.id}] ${cj.name}\n`;
+    text += `    ${interval} → next: ${next}\n`;
+    text += `    "${cj.prompt.slice(0, 60)}${cj.prompt.length > 60 ? "..." : ""}"\n`;
+    text += "\n";
+  }
+  
   return {
-    content: [{ type: "text" as const, text: formatCronjobs(cronjobs) }],
+    content: [{ type: "text" as const, text: text.trim() }],
     details: { operation: "list", cronjobs } as CronjobDetails,
   };
 }
 
-function handleCreate(state: CronjobStateManager, params: ManageCronjobsInput, onUpdate: () => void) {
-  const validation = state.validate({
-    name: params.name,
-    cronExpression: params.cronExpression,
-    prompt: params.prompt,
-    maxTriggers: params.maxTriggers ?? -1,
-  }, true);
-
-  if (!validation.valid) {
+function handleAdd(state: CronjobStateManager, params: CronToolInput, onUpdate: () => void) {
+  if (!params.prompt) {
     return {
-      content: [{ type: "text" as const, text: `Validation failed:\n${validation.errors.join("\n")}` }],
-      details: { operation: "create", cronjobs: state.read(), error: validation.errors.join("; ") } as CronjobDetails,
+      content: [{ type: "text" as const, text: "Error: --add requires a prompt argument" }],
       isError: true,
     };
   }
-
+  
+  const name = params.name || `Job #${state.getNextId()}`;
+  const cronExpr = params.every ? parseEvery(params.every) : "*/5 * * * *";
+  
+  // Validate cron expression
+  const validation = state.validate({ 
+    name, 
+    cronExpression: cronExpr, 
+    prompt: params.prompt,
+    maxTriggers: params["max-triggers"] ?? -1,
+  }, true);
+  
+  if (!validation.valid) {
+    return {
+      content: [{ type: "text" as const, text: `Validation failed:\n${validation.errors.join("\n")}` }],
+      isError: true,
+    };
+  }
+  
   const cronjob = state.create({
-    name: params.name!,
-    cronExpression: params.cronExpression!,
-    prompt: params.prompt!,
-    status: params.status ?? "active",
-    maxTriggers: params.maxTriggers ?? -1,
+    name,
+    cronExpression: cronExpr,
+    prompt: params.prompt,
+    status: "active",
+    maxTriggers: params["max-triggers"] ?? -1,
   });
-
+  
   onUpdate();
-
+  
+  const interval = formatEvery(cronExpr);
   return {
     content: [{
       type: "text" as const,
-      text: `Cronjob created: ${cronjob.name} (${cronjob.id})\nSchedule: ${describeCron(cronjob.cronExpression)}`,
+      text: `Created ${cronjob.id} "${cronjob.name}" @${interval}\nNext trigger: ${cronjob.nextTrigger ? new Date(cronjob.nextTrigger).toLocaleTimeString() : "N/A"}`,
     }],
     details: { operation: "create", cronjobs: state.read() } as CronjobDetails,
   };
 }
 
-function handleUpdate(state: CronjobStateManager, params: ManageCronjobsInput, onUpdate: () => void) {
-  if (!params.id) {
-    return {
-      content: [{ type: "text" as const, text: "ID required for update" }],
-      details: { operation: "update", cronjobs: state.read(), error: "ID required" } as CronjobDetails,
-      isError: true,
-    };
+function handleDelete(state: CronjobStateManager, id: string, onUpdate: () => void) {
+  if (!id) {
+    return { content: [{ type: "text" as const, text: "Error: --delete requires an ID" }], isError: true };
   }
-
-  const updates: Partial<Cronjob> = {};
-  if (params.name) updates.name = params.name;
-  if (params.cronExpression) updates.cronExpression = params.cronExpression;
-  if (params.prompt) updates.prompt = params.prompt;
-  if (params.status) updates.status = params.status;
-  if (params.maxTriggers !== undefined) updates.maxTriggers = params.maxTriggers;
-
-  const validation = state.validate({ cronExpression: params.cronExpression, maxTriggers: params.maxTriggers }, false);
-  if (!validation.valid) {
-    return {
-      content: [{ type: "text" as const, text: `Validation failed:\n${validation.errors.join("\n")}` }],
-      details: { operation: "update", cronjobs: state.read(), error: validation.errors.join("; ") } as CronjobDetails,
-      isError: true,
-    };
-  }
-
-  const success = state.update(params.id, updates);
+  
+  const success = state.delete(id);
   if (!success) {
-    return {
-      content: [{ type: "text" as const, text: `Cronjob not found: ${params.id}` }],
-      details: { operation: "update", cronjobs: state.read(), error: "Not found" } as CronjobDetails,
-      isError: true,
-    };
+    return { content: [{ type: "text" as const, text: `Cronjob not found: ${id}` }], isError: true };
   }
-
+  
   onUpdate();
-
-  return {
-    content: [{ type: "text" as const, text: `Cronjob updated: ${params.id}` }],
-    details: { operation: "update", cronjobs: state.read() } as CronjobDetails,
-  };
+  return { content: [{ type: "text" as const, text: `Deleted ${id}` }] };
 }
 
-function handleDelete(state: CronjobStateManager, params: ManageCronjobsInput, onUpdate: () => void) {
-  if (!params.id) {
-    return {
-      content: [{ type: "text" as const, text: "ID required for delete" }],
-      details: { operation: "delete", cronjobs: state.read(), error: "ID required" } as CronjobDetails,
-      isError: true,
-    };
+function handlePause(state: CronjobStateManager, id: string, onUpdate: () => void) {
+  if (!id) {
+    return { content: [{ type: "text" as const, text: "Error: --pause requires an ID" }], isError: true };
   }
-
-  const success = state.delete(params.id);
+  
+  const success = state.pause(id);
   if (!success) {
-    return {
-      content: [{ type: "text" as const, text: `Cronjob not found: ${params.id}` }],
-      details: { operation: "delete", cronjobs: state.read(), error: "Not found" } as CronjobDetails,
-      isError: true,
-    };
+    return { content: [{ type: "text" as const, text: `Cannot pause ${id}` }], isError: true };
   }
-
+  
   onUpdate();
-
-  return {
-    content: [{ type: "text" as const, text: `Cronjob deleted: ${params.id}` }],
-    details: { operation: "delete", cronjobs: state.read() } as CronjobDetails,
-  };
+  return { content: [{ type: "text" as const, text: `Paused ${id}` }] };
 }
 
-function handlePause(state: CronjobStateManager, params: ManageCronjobsInput, onUpdate: () => void) {
-  if (!params.id) {
-    return {
-      content: [{ type: "text" as const, text: "ID required for pause" }],
-      details: { operation: "pause", cronjobs: state.read(), error: "ID required" } as CronjobDetails,
-      isError: true,
-    };
+function handleResume(state: CronjobStateManager, id: string, onUpdate: () => void) {
+  if (!id) {
+    return { content: [{ type: "text" as const, text: "Error: --resume requires an ID" }], isError: true };
   }
-
-  const success = state.pause(params.id);
+  
+  const success = state.resume(id);
   if (!success) {
-    return {
-      content: [{ type: "text" as const, text: `Cannot pause: ${params.id}` }],
-      details: { operation: "pause", cronjobs: state.read(), error: "Cannot pause" } as CronjobDetails,
-      isError: true,
-    };
+    return { content: [{ type: "text" as const, text: `Cannot resume ${id}` }], isError: true };
   }
-
+  
   onUpdate();
-
-  return {
-    content: [{ type: "text" as const, text: `Cronjob paused: ${params.id}` }],
-    details: { operation: "pause", cronjobs: state.read() } as CronjobDetails,
-  };
+  return { content: [{ type: "text" as const, text: `Resumed ${id}` }] };
 }
 
-function handleResume(state: CronjobStateManager, params: ManageCronjobsInput, onUpdate: () => void) {
-  if (!params.id) {
-    return {
-      content: [{ type: "text" as const, text: "ID required for resume" }],
-      details: { operation: "resume", cronjobs: state.read(), error: "ID required" } as CronjobDetails,
-      isError: true,
-    };
-  }
-
-  const success = state.resume(params.id);
-  if (!success) {
-    return {
-      content: [{ type: "text" as const, text: `Cannot resume: ${params.id}` }],
-      details: { operation: "resume", cronjobs: state.read(), error: "Cannot resume" } as CronjobDetails,
-      isError: true,
-    };
-  }
-
+function handleClear(state: CronjobStateManager, onUpdate: () => void) {
+  state.clear();
   onUpdate();
-
-  return {
-    content: [{ type: "text" as const, text: `Cronjob resumed: ${params.id}` }],
-    details: { operation: "resume", cronjobs: state.read() } as CronjobDetails,
-  };
-}
-
-function formatCronjobs(cronjobs: Cronjob[]): string {
-  if (cronjobs.length === 0) {
-    return "No cronjobs scheduled.";
-  }
-
-  const lines = [`${cronjobs.length} cronjob(s):`];
-  for (const cj of cronjobs) {
-    const next = cj.nextTrigger ? new Date(cj.nextTrigger).toLocaleString() : "N/A";
-    lines.push(`- ${cj.name} (${cj.id})`);
-    lines.push(`  Schedule: ${describeCron(cj.cronExpression)}`);
-    lines.push(`  Status: ${cj.status} | Next: ${next}`);
-    lines.push(`  Prompt: ${cj.prompt.slice(0, 50)}${cj.prompt.length > 50 ? "..." : ""}`);
-  }
-
-  return lines.join("\n");
+  return { content: [{ type: "text" as const, text: "All cronjobs cleared" }] };
 }

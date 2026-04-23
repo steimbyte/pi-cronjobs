@@ -1,17 +1,11 @@
 /**
- * pi-cronjobs — Schedule cronjobs that inject prompts into the session.
- *
- * Provides:
- * - manage_cronjobs tool with create/list/update/delete/pause/resume
- * - Cron expression support (5-field: min hour day month weekday)
- * - Widget showing active cronjobs
- * - /cronjobs command to list and manage
+ * pi-cronjobs — Schedule cronjobs that inject prompts into the ACTIVE session.
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { CronjobStateManager } from "./state-manager";
-import { createManageCronjobsTool } from "./tool";
-import { updateWidget } from "./ui/cron-widget";
+import { createCrontabTool } from "./tool";
+import { updateWidget, STATUS_ICONS } from "./ui/cron-widget";
 
 export default function (pi: ExtensionAPI) {
   const state = new CronjobStateManager();
@@ -32,11 +26,11 @@ export default function (pi: ExtensionAPI) {
         // Record the trigger
         state.recordTrigger(cj.id);
 
-        // Inject the prompt
-        pi.sendUserMessage(cj.prompt, { deliverAs: "steer", triggerTurn: true });
-
-        // Notify
-        currentCtx?.ui.notify(`Cronjob triggered: ${cj.name}`, "info");
+        // Inject the prompt into the ACTIVE chat
+        pi.sendUserMessage(cj.prompt, { 
+          deliverAs: "steer",
+          triggerTurn: true 
+        });
 
         // Update widget
         if (currentCtx) {
@@ -92,15 +86,15 @@ export default function (pi: ExtensionAPI) {
     stopCronEngine();
   });
 
-  // --- Register the manage_cronjobs tool ---
+  // --- Register the crontab tool (CLI-style) ---
 
-  const tool = createManageCronjobsTool(state, onCronjobUpdate);
+  const tool = createCrontabTool(state, onCronjobUpdate);
   pi.registerTool(tool);
 
   // --- Register /cronjobs command ---
 
   pi.registerCommand("cronjobs", {
-    description: "Manage cronjobs: /cronjobs on|off|list|clear",
+    description: "Manage cronjobs: /cronjobs list|clear",
     handler: async (args, ctx) => {
       currentCtx = ctx;
       const arg = args?.trim().toLowerCase() || "list";
@@ -112,28 +106,14 @@ export default function (pi: ExtensionAPI) {
         return;
       }
 
-      if (arg === "on") {
-        state.setWidgetEnabled(true);
-        updateWidget(state, ctx);
-        ctx.ui.notify("Cronjobs widget enabled.", "info");
-        return;
-      }
-
-      if (arg === "off") {
-        state.setWidgetEnabled(false);
-        updateWidget(state, ctx);
-        ctx.ui.notify("Cronjobs widget disabled. Use /cronjobs list to view.", "info");
-        return;
-      }
-
       // list (default)
       const cronjobs = state.read();
+      const stats = state.getStats();
+      
       if (cronjobs.length === 0) {
         ctx.ui.notify("No cronjobs scheduled.", "info");
       } else {
-        const stats = state.getStats();
-        const widgetStatus = state.isWidgetEnabled() ? "widget: ON" : "widget: OFF";
-        ctx.ui.notify(`${stats.active}/${stats.total} active | ${widgetStatus}`, "info");
+        ctx.ui.notify(`${stats.active}/${stats.total} active`, "info");
       }
     },
   });

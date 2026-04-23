@@ -181,6 +181,11 @@ export class CronjobStateManager {
     return this.widgetEnabled;
   }
 
+  /** Get next ID without incrementing */
+  getNextId(): number {
+    return this.nextId;
+  }
+
   /** Get stats */
   getStats(): CronjobStats {
     const cronjobs = this.read();

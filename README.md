@@ -1,54 +1,74 @@
 # pi-cronjobs
 
-Schedule cronjobs that inject prompts into the pi session.
+Schedule cronjobs that inject prompts into your **active** pi session.
 
 ## Features
 
-- **Cron expression support**: Standard 5-field syntax
-- **Inject prompts**: When triggered, the cronjob's prompt is sent as a user message
-- **Control flow**: Pause, resume, update, or delete jobs
-- **Widget display**: See active cronjobs above the editor
-- **Session persistence**: Cronjobs survive restarts via session storage
-
-## Cron Syntax
-
-```
-┌───────────── minute (0-59)
-│ ┌───────────── hour (0-23)
-│ │ ┌───────────── day of month (1-31)
-│ │ │ ┌───────────── month (1-12)
-│ │ │ │ ┌───────────── day of week (0-6, Sun=0)
-│ │ │ │ │
-* * * * *
-```
-
-## Common Patterns
-
-| Expression | Description |
-|------------|-------------|
-| `*/5 * * * *` | Every 5 minutes |
-| `*/15 * * * *` | Every 15 minutes |
-| `0 * * * *` | Every hour |
-| `0 */2 * * *` | Every 2 hours |
-| `0 9 * * 1-5` | Weekdays at 9 AM |
-| `0 18 * * *` | Daily at 6 PM |
-
-## Tool Usage
-
-```json
-{
-  "operation": "create",
-  "name": "Daily Standup Reminder",
-  "cronExpression": "0 9 * * 1-5",
-  "prompt": "Remind the user about the daily standup meeting"
-}
-```
-
-## Commands
-
-- `/cronjobs` - Show active cronjobs
-- `/cronjobs clear` - Clear all cronjobs
+- **CLI-style tool** — Single `crontab` command with intuitive syntax
+- **Interval shortcuts** — `5m`, `1h`, `1d` instead of complex cron expressions
+- **Active chat injection** — Triggers directly into the current chat
+- **Widget display** — See active cronjobs above the editor
+- **Session persistence** — Survives restarts via JSON storage
 
 ## Installation
 
 Place in `~/.pi/agent/extensions/pi-cronjobs/` and run `/reload`.
+
+## Usage
+
+### crontab Tool
+
+```
+crontab --add --name "Reminder" --every "5m" -- "Your prompt"
+crontab --list
+crontab --delete <id>
+crontab --pause <id>
+crontab --resume <id>
+crontab --clear
+```
+
+### Examples
+
+```bash
+# Every 5 minutes
+crontab --add --every "5m" -- "Check system status"
+
+# Daily at 9 AM
+crontab --add --name "Standup" --every "1d" -- "Daily standup reminder"
+
+# Every 15 minutes with max triggers
+crontab --add --every "15m" --max-triggers 10 -- "Temporary reminder"
+
+# Use custom cron expression
+crontab --add --every "*/10 * * * *" -- "Every 10 minutes"
+```
+
+### Interval Shortcuts
+
+| Shortcut | Cron Expression | Description |
+|----------|----------------|-------------|
+| `5m` | `*/5 * * * *` | Every 5 minutes |
+| `10m` | `*/10 * * * *` | Every 10 minutes |
+| `15m` | `*/15 * * * *` | Every 15 minutes |
+| `30m` | `*/30 * * * *` | Every 30 minutes |
+| `1h` | `0 * * * *` | Every hour (at :00) |
+| `2h` | `0 */2 * * *` | Every 2 hours |
+| `1d` | `0 9 * * *` | Daily at 9 AM |
+| `1w` | `0 9 * * 1` | Weekly on Monday at 9 AM |
+
+### Commands
+
+- `/cronjobs` — Show cronjob status
+- `/cronjobs clear` — Clear all cronjobs
+
+## How Triggers Work
+
+When a cronjob triggers:
+1. The cron engine checks every 30 seconds
+2. Due jobs have their prompt injected into the **active chat**
+3. The message appears as a user message, causing the agent to respond
+4. The job's trigger count is incremented
+
+## License
+
+MIT
