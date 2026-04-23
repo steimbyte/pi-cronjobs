@@ -8,6 +8,7 @@
  *   crontab --pause <id>
  *   crontab --resume <id>
  *   crontab --clear
+ *   crontab --help
  * 
  * Interval shortcuts:
  *   5m  = every 5 minutes
@@ -33,6 +34,7 @@ export interface CronToolInput {
   pause?: boolean;
   resume?: boolean;
   clear?: boolean;
+  help?: boolean;
   
   // Options for --add
   name?: string;
@@ -101,8 +103,10 @@ Usage:
   crontab --pause <id>
   crontab --resume <id>
   crontab --clear
+  crontab --help
 
 Interval shortcuts:
+  1m  = every minute
   5m  = every 5 minutes
   10m = every 10 minutes
   15m = every 15 minutes
@@ -113,7 +117,7 @@ Interval shortcuts:
   1w  = weekly on Monday at 9:00 AM
 
 Examples:
-  crontab --add --every "5m" -- "Check system status"
+  crontab --add --every "1m" -- "Check WhatsApp messages"
   crontab --add --name "Daily" --every "1d" -- "Standup reminder"
   crontab --add --every "*/15 * * * *" -- "Custom cron expression"
 `,
@@ -155,10 +159,13 @@ Examples:
         return handleResume(state, params.id!, onUpdate);
       }
       
-      return {
-        content: [{ type: "text" as const, text: "Unknown operation" }],
-        isError: true,
-      };
+      // --help
+      if (params.help) {
+        return handleHelp();
+      }
+      
+      // Default: show help
+      return handleHelp();
     },
 
     renderCall(args: CronToolInput, theme: any) {
@@ -312,4 +319,50 @@ function handleClear(state: CronjobStateManager, onUpdate: () => void) {
   state.clear();
   onUpdate();
   return { content: [{ type: "text" as const, text: "All cronjobs cleared" }] };
+}
+
+function handleHelp() {
+  const helpText = `
+╔══════════════════════════════════════════════════════════════╗
+║                    crontab - Help                            ║
+╠══════════════════════════════════════════════════════════════╣
+║  Schedule prompts that inject into your active chat.          ║
+╠══════════════════════════════════════════════════════════════╣
+║  USAGE                                                         ║
+║    crontab --add [options] -- "prompt text"                    ║
+║    crontab --list                                             ║
+║    crontab --delete <id>                                      ║
+║    crontab --pause <id>                                       ║
+║    crontab --resume <id>                                      ║
+║    crontab --clear                                            ║
+║    crontab --help                                             ║
+╠══════════════════════════════════════════════════════════════╣
+║  OPTIONS FOR --add                                             ║
+║    --name <text>        Name for this cronjob                  ║
+║    --every <interval>   How often to run (see below)           ║
+║    --max-triggers <n>   Max times to trigger (-1 = forever)    ║
+╠══════════════════════════════════════════════════════════════╣
+║  INTERVAL SHORTCUTS                                            ║
+║    1m   Every minute                                            ║
+║    5m   Every 5 minutes                                        ║
+║    10m  Every 10 minutes                                       ║
+║    15m  Every 15 minutes                                      ║
+║    30m  Every 30 minutes                                      ║
+║    1h   Every hour (at :00)                                    ║
+║    2h   Every 2 hours                                          ║
+║    1d   Daily at 9:00 AM                                       ║
+║    1w   Weekly on Monday at 9:00 AM                             ║
+║                                                              ║
+║    Or use custom cron: */10 * * * * (every 10 minutes)         ║
+╠══════════════════════════════════════════════════════════════╣
+║  EXAMPLES                                                      ║
+║    crontab --add --every "1m" -- "Check WhatsApp messages"      ║
+║    crontab --add --name "Standup" --every "1d" -- "Standup!"     ║
+║    crontab --list                                              ║
+║    crontab --pause cron_1                                      ║
+║    crontab --clear                                             ║
+╚══════════════════════════════════════════════════════════════╝
+`;
+
+  return { content: [{ type: "text" as const, text: helpText.trim() }] };
 }
