@@ -1,0 +1,18 @@
+{
+  "cronjobs": [
+    {
+      "name": "Hermes Playwright Task",
+      "cronExpression": "0 12 23 4 *",
+      "prompt": "Erinnerung: Playwright testen für Hermes-Projekt. Prüfe ob Installation erfolgreich war und führe einen einfachen Browser-Test durch.",
+      "status": "active",
+      "maxTriggers": 1,
+      "id": "cron_2",
+      "createdAt": 1776894254835,
+      "triggerCount": 0,
+      "lastTriggered": null,
+      "nextTrigger": 1776938400000
+    }
+  ],
+  "nextId": 3,
+  "widgetEnabled": true
+}

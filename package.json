@@ -1,0 +1,28 @@
+{
+  "name": "pi-cronjobs",
+  "version": "0.1.0",
+  "description": "Pi extension for scheduling cronjobs that inject prompts into the session",
+  "author": "steimer",
+  "license": "MIT",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "cron",
+    "scheduler",
+    "automation"
+  ],
+  "dependencies": {
+    "@mariozechner/pi-coding-agent": "latest",
+    "@mariozechner/pi-tui": "latest",
+    "@mariozechner/pi-ai": "latest",
+    "@sinclair/typebox": "latest",
+    "cron-parser": "^4.9.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0",
+    "@types/node": "^20.0.0"
+  },
+  "pi": {
+    "extensions": ["./src/index.ts"]
+  }
+}
